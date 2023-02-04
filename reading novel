@@ -1,0 +1,470 @@
+// ==UserScript==
+// @name         Novel Reader
+// @namespace    http://tampermonkey.net/
+// @version      0.1
+// @description  try to take over the world!
+// @author       You
+// @match        https://metruyencv.com/truyen/*/chuong*
+// @match        https://truyenyy.vip/truyen/*/chuong*
+// @match        https://gettruyen.com/*/chuong*
+// @match        https://sangtacviet.pro/truyen/faloo/1/*/*
+// @match        https://vtruyen.com/truyen/*/chuong*
+// @match        https://truyen.tangthuvien.vn/doc-truyen/*chuong*
+// @match        https://www.novelpub.com/novel/*
+// @match        https://www.lightnovelpub.com/novel/*
+// @match        https://jpmtl.com/books/*/*
+// @icon         https://theitfox.com/public/favicon.jpg
+// @grant        none
+// ==/UserScript==
+
+(function () {
+  "use strict";
+
+  class PromiseQueue {
+    constructor() {
+      this.tasks = [];
+    }
+
+    schedule(func) {
+      this.tasks.push(func);
+      if (this.tasks.length == 1) {
+        this.run();
+      }
+    }
+
+    clear() {
+      this.tasks = [];
+    }
+
+    async run() {
+      const func = this.tasks[0];
+      if (func !== undefined) {
+        try {
+          await func();
+        } catch (ex) {
+          console.error(ex);
+        }
+        this.tasks.shift();
+        await this.run();
+      }
+    }
+  }
+
+  const VIEW_HTML = `
+<div
+  style="
+    display: flex;
+    flex-flow: column;
+    background: #ebebeb;
+    padding: 8px;
+    border-radius: 8px;
+    position: fixed;
+    right: 54px;
+    top: 54px;
+    z-index: 9999;
+    -webkit-box-shadow: 1px 1px 4px 1px rgb(0 0 0 / 20%);
+    -moz-box-shadow: 1px 1px 4px 1px rgb(0 0 0 / 20%);
+    box-shadow: 1px 1px 4px 1px rgb(0 0 0 / 20%);
+  "
+>
+  <a id="btn-toggle-show" href="#" style="margin-left: auto;">
+    <img style="width: 20px" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAB4AAAAeCAYAAAA7MK6iAAAABmJLR0QA/wD/AP+gvaeTAAAAsklEQVRIie2WSwqAMAxER+9g0fsfR1e68Di6aUHFTyYdKKgDWbXjSyNNA/z6qgKAIUbI8PeMvwEwAlhizAA6Aur2DxtTigm2zEPce/T3XrAFfgU1g4+l2sZV2Z48rQXMwmVQBi6HJt39t+lhzXMNd7o7lfykXrgUaoVT0FqcXCX+HlVqpr1KoFJ4ketkaQ6e9poNte41wz1tUAIv9iwWGwTORhemDWb5Q8ySGtaE/l8v0ArSo+eVYaS+0wAAAABJRU5ErkJggg=="/>
+  </a>
+  <div id="speech-controls-container" style="margin-top: 4px">
+    <div style="display: flex; align-items: center">
+      <label for="voice" style="width: 90px">Voice</label>
+      <select id="voice" style="width: 164px"></select>
+    </div>
+    <div style="display: flex; align-items: center; margin-top: 8px">
+      <label for="language" style="width: 90px">Language</label>
+      <select id="language" style="width: 164px"></select>
+    </div>
+    <div style="display: flex; align-items: center; margin-top: 4px; width: 270px">
+      <label for="speed" style="width: 90px">Speed</label>
+      <input
+        id="speed"
+        type="range"
+        value="1"
+        min="0.5"
+        max="2"
+        step="0.1"
+        style="width: 164px"
+      />
+    </div>
+    <div style="display: flex; align-items: center; margin-top: 8px">
+      <label for="pitch" style="width: 90px">Pitch</label>
+      <input
+        id="pitch"
+        type="range"
+        value="1"
+        min="0.1"
+        max="2"
+        step="0.1"
+        style="width: 164px"
+      />
+    </div>
+    <div style="display: flex; justify-content: center; margin-top: 8px">
+      <div id="playBtn" style="display: flex; align-items: center">
+        <img
+          style="width: 28px; height: 28px"
+          src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAB4AAAAeCAYAAAA7MK6iAAAABmJLR0QA/wD/AP+gvaeTAAAAxElEQVRIie3WMWpCURBG4Q8FSRrtbC2SPhvICmzchVuwtXQLbsE2pVUIkjqQHVgqNmIj6EvxGHhFQAIvcxt/OPVhhrlzh3sKZ4MvTLLFVYNPvJYQB294LiGucMYSw2xxcMQcj9niYIsputni4BvjEuJgjZcS4goXrDDKFgcnLDDIFgd7zNDLFgfvTUHnL23ISJuV7iS3Ooarn1VxkeeUvkDSV2b6J3FQT+pDW8Jb4vRD4Kqe1Kf/Ev4mTj32PhQ6b+9pPT+XHgysHrPM6QAAAABJRU5ErkJggg=="
+        />
+        <img
+          style="width: 28px; height: 28px; display: none"
+          src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAB4AAAAeCAYAAAA7MK6iAAAABmJLR0QA/wD/AP+gvaeTAAAAXklEQVRIie2WUQqAIBAFx06XdP8LuN5DfwwKUhA2kHoD+yPjzu+C+DMHkIHSxoDo6Hexy5JzkpcfBovK5J8pfxuEX0VhhRVWWGGFFV47nB/ezNHvErnfUQnYHX3xcSrwEiKQG9/iJwAAAABJRU5ErkJggg=="
+        />
+      </div>
+      <div id="stopBtn" style="margin-left: 12px">
+        <img
+          style="width: 28px; height: 28px"
+          src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADIAAAAyCAYAAAAeP4ixAAAABmJLR0QA/wD/AP+gvaeTAAAAU0lEQVRoge3PwQmAMAAEwWj/PZsOJAgJi8y873E7BgB8dy1snu0v1rx+vU+92E1IjZAaITVCaoTUCKkRUiOkRkiNkBohNUJqhNQIqRFSIwQA/mQCL3ABRJ7UgK8AAAAASUVORK5CYII="
+        />
+      </div>
+      <div id="nextBtn" style="margin-left: 12px">
+        <img
+          style="width: 28px; height: 28px"
+          src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAABmJLR0QA/wD/AP+gvaeTAAABZUlEQVR4nO2asU0DQRBFHySIEEJED9ABUAAV4CogIKUF2nBICl1AigQVQIYjhuC0kgMjrc87N9r786TJLM33S+Z2dyBJkiRJkiSp5hB4AJ6Ak4D+VlFuXAPva42+gBvPhhsIFfBfwyVw5Nm4IkOoAAM+gAvP5hUZQgUY8As8AgeBGUIFlHoFzgIzuFErwIAf4B7YD8jgxjYCSj0DpxNncGOMAAO+aTcuuxRQqsW47FqAAZ/ApXMGN1oIMHYbl7MQUOoNOHfI4EZrAcb243J2Akq9UDcuZyvAGMblokEGN7wFlFoCxztkcGMqAcYwLq9GZnBjSgHG5nEpJaDU+riUFGAM4/K28rfV7I0Q0APV/6v1Wb07UkB0gGh6ErAC7qJD5BicuKQ/hKQ/hWUPQ9LHYdkLEekrMdlLUelrcemHEdmnMenHUdnncekFCdkVGeklKek1OZlFSflVWRBflk6SJEmSJJkNf46zQqaV6bteAAAAAElFTkSuQmCC"
+        />
+      </div>
+    </div>
+  </div>
+</div>
+    `;
+
+  const LANGUAGES = { "en-US": "English", "vi-VN": "Vietnamese" };
+  const DEFAULT_LANGUAGE = "vi-VN";
+  const GROUP_SIZE = 2;
+  const SpeechSynthesis = window.speechSynthesis;
+  const queue = new PromiseQueue();
+
+  let controlsContainer = null;
+  let voiceSelect = null;
+  let languageSelect = null;
+  let speedLabel = null;
+  let pitchLabel = null;
+  let playBtn = null;
+  let language = null;
+  let voices = [];
+  let voice = null;
+  let speed = 1;
+  let pitch = 1;
+
+  let utterance = null;
+  let state = "stopped";
+
+  function changeVoice(e) {
+    localStorage.__voice = e.target.value;
+    voice = voices.filter((v) => v.name == e.target.value)[0];
+  }
+
+  function changeLanguage(e) {
+    language = e.target.value;
+    localStorage.__language = e.target.value;
+    voices = speechSynthesis.getVoices().filter((v) => v.lang.match(language));
+    voice = voices[0];
+    voiceSelect.innerHTML = voices.map((v) => `<option value="${v.name}" ${v.name == voice.name ? "selected" : ""}>${v.name}</option>`).join("\n");
+  }
+
+  function changeSpeed(e) {
+    speed = parseFloat(e.target.value);
+    localStorage.__speed = speed;
+    speedLabel.innerText = `Speed (${speed}x)`;
+  }
+
+  function changePitch(e) {
+    pitch = parseFloat(e.target.value);
+    localStorage.__pitch = pitch;
+    pitchLabel.innerText = `Pitch (${pitch}x)`;
+  }
+
+  function getTexts() {
+    const groupSize = GROUP_SIZE;
+    if (location.host.match("metruyencv.com")) {
+      return document
+        .querySelector("#js-read__content")
+        .innerText.split("\n")
+        .filter((s) => s.length > 0 && s != "— QUẢNG CÁO —")
+        .reduce((prev, item, idx) => {
+          let arr = prev[Math.floor(idx / groupSize)] || [];
+          prev[Math.floor(idx / groupSize)] = arr;
+          arr.push(item);
+          return prev;
+        }, [])
+        .map((group) => group.join("\n"));
+    }
+    if (location.host.match("truyenyy.vip")) {
+      return document
+        .querySelector("#inner_chap_content_1")
+        .innerText.split("\n")
+        .filter((s) => s.length > 0 && s != "— QUẢNG CÁO —")
+        .reduce((prev, item, idx) => {
+          let arr = prev[Math.floor(idx / groupSize)] || [];
+          prev[Math.floor(idx / groupSize)] = arr;
+          arr.push(item);
+          return prev;
+        }, [])
+        .map((group) => group.join("\n"));
+    }
+    if (location.host.match("gettruyen.com")) {
+      return document
+        .querySelector("#content")
+        .innerText.split("\n")
+        .filter((s) => s.length > 0 && s != "— QUẢNG CÁO —")
+        .reduce((prev, item, idx) => {
+          let arr = prev[Math.floor(idx / groupSize)] || [];
+          prev[Math.floor(idx / groupSize)] = arr;
+          arr.push(item);
+          return prev;
+        }, [])
+        .map((group) => group.join("\n"));
+    }
+    if (location.host.match("sangtacviet.pro")) {
+      return document
+        .querySelector("#content-container")
+        .innerText.split("\n")
+        .filter((s) => s.length > 0 && s != "— QUẢNG CÁO —")
+        .reduce((prev, item, idx) => {
+          let arr = prev[Math.floor(idx / groupSize)] || [];
+          prev[Math.floor(idx / groupSize)] = arr;
+          arr.push(item);
+          return prev;
+        }, [])
+        .map((group) => group.join("\n"));
+    }
+    if (location.host.match("vtruyen.com")) {
+      return document
+        .querySelector("#js-read__content")
+        .innerText.split("\n")
+        .filter((s) => s.length > 0 && s != "— QUẢNG CÁO —")
+        .reduce((prev, item, idx) => {
+          let arr = prev[Math.floor(idx / groupSize)] || [];
+          prev[Math.floor(idx / groupSize)] = arr;
+          arr.push(item);
+          return prev;
+        }, [])
+        .map((group) => group.join("\n"));
+    }
+    if (location.host.match("tangthuvien")) {
+      return document
+        .querySelector(".chapter-c-content .box-chap")
+        .innerText.split("\n")
+        .filter((s) => s.length > 0)
+        .reduce((prev, item, idx) => {
+          let arr = prev[Math.floor(idx / groupSize)] || [];
+          prev[Math.floor(idx / groupSize)] = arr;
+          arr.push(item);
+          return prev;
+        }, [])
+        .map((group) => group.join("\n"));
+    }
+    if (location.host.match("novelpub.com")) {
+      return [...document.querySelectorAll("div#chapter-container > p")]
+        .map((p) => p.textContent)
+        .filter(
+          (s) =>
+            s != "The latest_episodes are on_the nove‍lpub.c​om website." &&
+            s != "Visit nove‎lpub.c‌om for a better_user experience" &&
+            s != "You can_find the rest of this_content on the nove‍lpub.c­om platform." &&
+            s != "Try the nove‎lpub.c‌om platform_for the most advanced_reading experience."
+        )
+        .reduce((prev, item, idx) => {
+          let arr = prev[Math.floor(idx / groupSize)] || [];
+          prev[Math.floor(idx / groupSize)] = arr;
+          arr.push(item);
+          return prev;
+        }, [])
+        .map((group) => group.join("\n"));
+    }
+    if (location.host.match("jpmtl.com")) {
+      return [...document.querySelectorAll("div.chapter-content__content > div.cp-content > p")]
+        .map((p) => p.textContent)
+        .reduce((prev, item, idx) => {
+          let arr = prev[Math.floor(idx / groupSize)] || [];
+          prev[Math.floor(idx / groupSize)] = arr;
+          arr.push(item);
+          return prev;
+        }, [])
+        .map((group) => group.join("\n"));
+    }
+    return [];
+  }
+
+  function onEnd() {
+    if (location.host.match("metruyencv.com")) {
+      document.querySelector("#nextChapter").click();
+    }
+    if (location.host.match("truyenyy.vip")) {
+      document.querySelector(".weui-btn.weui-btn_primary").click();
+    }
+    if (location.host.match("gettruyen.com")) {
+      document.querySelector("#next-page").click();
+    }
+    if (location.host.match("sangtacviet.pro")) {
+      document.querySelector("#navnextbot").click();
+    }
+    if (location.host.match("vtruyen.com")) {
+      document.querySelector("#nextChapter").click();
+    }
+    if (location.host.match("tangthuvien")) {
+      document.querySelector(".bot-next_chap.bot-control").click();
+    }
+    if (location.host.match("novelpub.com")) {
+      document.querySelector("a.nextchap").click();
+    }
+    if (location.host.match("jpmtl.com")) {
+      document.querySelector("a.chapter-wrapper__nav:last-child").click();
+    }
+  }
+
+  function nextButton() {
+    SpeechSynthesis.cancel();
+  }
+
+  function playButton() {
+    if (!utterance) {
+      stopButton();
+    }
+    if (state == "playing") {
+      playBtn.querySelector("img:nth-child(1)").style.display = "";
+      playBtn.querySelector("img:nth-child(2)").style.display = "none";
+      state = "paused";
+      localStorage.__reading = 0;
+      SpeechSynthesis.pause();
+    } else if (state == "stopped") {
+      playBtn.querySelector("img:nth-child(1)").style.display = "none";
+      playBtn.querySelector("img:nth-child(2)").style.display = "";
+      state = "playing";
+      localStorage.__reading = 1;
+
+      const texts = getTexts();
+      console.log(texts);
+      const length = texts.length;
+      texts.forEach((text, idx) => {
+        queue.schedule(() => {
+          let tries = 0;
+          function speakText(resolve, reject, fallback=false) {
+            utterance = new SpeechSynthesisUtterance(text);
+            if(!fallback) utterance.voice = voice;
+            utterance.lang = language;
+            utterance.rate = speed;
+            utterance.pitch = pitch;
+            utterance.addEventListener("end", (event) => {
+              resolve();
+              if (idx == length - 1) {
+                onEnd();
+              }
+            });
+            utterance.addEventListener("error", (event) => {
+              console.error(event, `Error: ${text}`);
+              if (tries <= 10) {
+                tries++;
+                setTimeout(() => {
+                  speakText(resolve, reject, tries >= 3);
+                }, 1000);
+              } else {
+                reject();
+                if (idx == length - 1) {
+                  onEnd();
+                }
+              }
+            });
+            SpeechSynthesis.speak(utterance);
+          }
+          return new Promise(speakText);
+        });
+      });
+    } else if (state == "paused") {
+      playBtn.querySelector("img:nth-child(1)").style.display = "none";
+      playBtn.querySelector("img:nth-child(2)").style.display = "";
+      state = "playing";
+      localStorage.__reading = 1;
+      SpeechSynthesis.resume();
+    }
+  }
+
+  function stopButton() {
+    playBtn.querySelector("img:nth-child(1)").style.display = "";
+    playBtn.querySelector("img:nth-child(2)").style.display = "none";
+    state = "stopped";
+    localStorage.__reading = 0;
+    queue.clear();
+    SpeechSynthesis.cancel();
+  }
+
+  function toggleShowButton() {
+    if (!controlsContainer.style.display) {
+      controlsContainer.style.display = "none";
+    } else {
+      controlsContainer.style.display = "";
+    }
+  }
+
+  function setup() {
+    utterance = null;
+    SpeechSynthesis.cancel();
+    speed = parseFloat(localStorage.__speed);
+    if (isNaN(speed)) {
+      speed = 1.0;
+      localStorage.__speed = speed;
+    }
+    pitch = parseFloat(localStorage.__pitch);
+    if (isNaN(pitch)) {
+      pitch = 1.0;
+      localStorage.__pitch = pitch;
+    }
+    language = localStorage.__language;
+    if (!language) {
+      language = DEFAULT_LANGUAGE;
+    }
+
+    voices = speechSynthesis.getVoices().filter((v) => v.lang.match(language));
+    voice = voices.filter((v) => v.name == localStorage.__voice)[0];
+
+    if (!voice) {
+      voice = voices[0];
+    }
+
+    const container = document.createElement("div");
+    container.innerHTML = VIEW_HTML;
+    const div = container.querySelector("div:first-child").cloneNode(true);
+    document.body.appendChild(div);
+
+    div.querySelector("#speed").value = speed;
+    div.querySelector("#pitch").value = pitch;
+
+    voiceSelect = div.querySelector("#voice");
+    voiceSelect.innerHTML = voices.map((v) => `<option value="${v.name}" ${v.name == voice.name ? "selected" : ""}>${v.name}</option>`).join("\n");
+    voiceSelect.onchange = changeVoice;
+
+    languageSelect = div.querySelector("#language");
+    languageSelect.innerHTML = Object.entries(LANGUAGES)
+      .map(([key, value]) => `<option value="${key}" ${key == language ? "selected" : ""}>${value}</option>`)
+      .join("\n");
+    languageSelect.onchange = changeLanguage;
+
+    div.querySelector("#speed").onchange = changeSpeed;
+    div.querySelector("#pitch").onchange = changePitch;
+
+    speedLabel = div.querySelector("label[for=speed]");
+    speedLabel.innerText = `Speed (${speed}x)`;
+
+    pitchLabel = div.querySelector("label[for=pitch]");
+    pitchLabel.innerText = `Pitch (${pitch}x)`;
+
+    playBtn = div.querySelector("div#playBtn");
+    playBtn.onclick = playButton;
+    div.querySelector("div#stopBtn").onclick = stopButton;
+
+    div.querySelector("div#nextBtn").onclick = nextButton;
+
+    div.querySelector("#btn-toggle-show").onclick = toggleShowButton;
+
+    controlsContainer = div.querySelector("#speech-controls-container");
+
+    if (parseInt(localStorage.__reading) && !SpeechSynthesis.speaking) {
+      playBtn.click();
+    }
+  }
+
+  setTimeout(setup, 1000);
+})();
